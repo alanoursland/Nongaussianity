@@ -50,3 +50,35 @@ In addition to established methods, we propose two novel techniques to further o
 1. **Mahalanobis Distance Histogram**: Constructs a histogram of the Mahalanobis distances between the points in the dataset and the mean of the fitted Gaussian distribution. This heuristic offers a visual and quantitative metric of how well the data conforms to a Gaussian model.
 2. **KL Divergence**: Provides a method to estimate the Kullback-Leibler divergence between the empirical distribution of the point cloud and a theoretical Gaussian distribution. This technique helps in quantifying the deviation from Gaussianity.
 
+## Testing Strategy
+To rigorously evaluate the effectiveness of our Gaussianity and non-Gaussianity metrics, we employ a diverse set of synthetic point cloud distributions. These distributions are specifically chosen to challenge the assumptions of Gaussianity and test the robustness of our metrics under various realistic scenarios. Below is a description of the different types of distributions we generate:
+
+### Gaussian Distributions
+- **Standard Gaussian**: Single-mode distributions where points are symmetrically distributed around the mean, serving as a baseline for Gaussian behavior.
+
+### Non-Gaussian Distributions
+- **Uniform Distribution**: Points are evenly distributed across a defined range, lacking the central concentration characteristic of Gaussian distributions.
+- **Multimodal Distribution**: Includes bimodal and trimodal distributions, where data contains multiple distinct peaks, complicating the Gaussian model fit.
+- **Heavy-Tailed Distributions**:
+  - Cauchy and Levy Distributions: These distributions are known for their heavy tails and outlier presence, significantly differing from the Gaussian distribution's tail behavior.
+- **Skewed Distributions**:
+  - **Log-Normal and Exponential Distributions**: These distributions are skewed, with a concentration of data points on one side of the mode, unlike the symmetric Gaussian distribution.
+- **Clustered Distributions**:
+  - **Mixture of Gaussians**: A combination of several Gaussian distributions with different means and variances to create overlapping clusters.
+  - **Clusters of Varying Sizes and Densities**: To mimic real-world data complexities in segmentation and clustering tasks.
+- **Structured or Geometric Patterns**:
+  - **Spiral and Grid Patterns**: To simulate structured data from various scientific and industrial sources.
+  - **Doughnut and Spherical Distributions**: These circular and volumetric distributions challenge the metrics by introducing hollow-centered data.
+- **Sinusoidal and Periodic Distributions**: For testing the metrics against predictable, periodic variations commonly seen in time-series data.
+- **Noise-Infused Gaussian Distributions**:
+  - **Gaussian with Impulsive Noise**: Normal data contaminated with sparse, large amplitude outliers to mimic error or anomaly occurrences.
+
+### Testing Methodology
+Our approach involves systematically applying our Gaussianity metrics to each of these distributions and evaluating their sensitivity and specificity in identifying non-Gaussian characteristics. We quantify the performance of each metric through:
+
+- **Visual Inspections**: Using plots and visualizations to qualitatively assess how well the metrics highlight non-Gaussian features.
+- **Statistical Analysis**: Calculating performance metrics such as error rates, sensitivity, and specificity across different scenarios.
+- **Comparative Analysis**: Comparing the results obtained from our metrics against traditional Gaussianity tests to establish benchmarks and improvements.
+
+This comprehensive testing strategy ensures that our tools are validated across a wide spectrum of conditions, providing users with robust, tested methodologies for assessing Gaussianity in their data.
+
