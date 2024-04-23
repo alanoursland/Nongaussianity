@@ -26,7 +26,7 @@ Understanding the Gaussianity (or lack thereof) of a point cloud is valuable in 
 
 Researchers are actively exploring ways to incorporate Gaussianity assessments into other areas, including feature selection, generative modeling, and even the design of neural network architectures. This project aims to bridge this gap by providing a suite of metrics that more accurately reflect the characteristics of non-Gaussian point clouds. These metrics are designed to enhance the flexibility and accuracy of data analysis pipelines, enabling better decision-making and more nuanced data interpretation. Through this work, we seek to empower researchers and developers with tools to handle and analyze non-Gaussian data more effectively, paving the way for innovative applications across various scientific and engineering disciplines.
 
-## Previous Techniques
+## Previous Work
 This repository includes the following techniques for assessing Gaussianity in point clouds:
 
 1. **Statistical Moment Analysis**: 

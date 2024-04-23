@@ -29,7 +29,6 @@ def display_point_cloud(data):
     plt.xlabel('Dimension 1')
     plt.ylabel('Dimension 2')
     plt.grid(True)
-    plt.axis('equal')  # Ensures that the scale of x and y axes are the same
     plt.show()
 
 def main(filename):
