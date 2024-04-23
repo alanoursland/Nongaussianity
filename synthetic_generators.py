@@ -175,29 +175,96 @@ def sample_exponential(num_points, dimensions, scale=1.0):
     return samples
 
 
-def sample_sphere(num_points, dimensions):
-    """Generate points on the surface of a sphere."""
-    pass
+def sample_sphere(num_points, dimensions, origin=None, radius=1.0):
+    """
+    Generate points uniformly distributed on the surface of a sphere with specified origin and radius.
 
+    Parameters:
+    num_points (int): The number of points to generate.
+    dimensions (int): The dimensionality of the space in which the sphere exists.
+    origin (torch.Tensor | None): The center of the sphere in the given space. Defaults to the zero vector.
+    radius (float): The radius of the sphere. Defaults to 1.0.
 
-def sample_sinusoidal(num_points, dimensions):
-    """Generate points from a sinusoidal distribution."""
-    pass
+    Returns:
+    torch.Tensor: A tensor of shape (num_points, dimensions) containing the points on the sphere surface.
+    """
+    # Generate random Gaussian points
+    points = torch.randn(num_points, dimensions)
 
+    # Normalize each point to be on the surface of the unit sphere
+    norms = torch.norm(points, p=2, dim=1, keepdim=True)
+    results = points / norms
 
-def sample_periodic(num_points, dimensions):
-    """Generate points from a periodic distribution."""
-    pass
+    # Apply radius and origin
+    results.mul_(radius)
+    if origin is not None:
+        results.add_(origin)
+    
+    return results
 
+def sample_sinusoidal(num_points, dimensions, frequencies=None, phases=None, amplitudes=None, bounds=None):
+    """
+    Generate points following a sinusoidal pattern in each dimension, with specified amplitudes, frequencies, phases, and bounds.
 
-def sample_gaussian_with_impulse_noise(num_points, dimensions, noise_prob):
-    """Generate points from a Gaussian distribution with impulsive noise."""
-    pass
+    Parameters:
+    num_points (int): The number of points to generate.
+    dimensions (int): The number of dimensions, each will follow a sinusoid.
+    frequencies (list | None): Optional list of frequencies for each dimension. Defaults to 1 for all dimensions.
+    phases (list | None): Optional list of phase shifts for each dimension. Defaults to 0 for all dimensions.
+    amplitudes (list | None): Optional list of amplitudes for each dimension. Defaults to 1 for all dimensions.
+    bounds (list of tuples | None): Optional list of tuples, where each tuple contains the start and end of the range
+                                    for each dimension. Defaults to (0, 2π) for all dimensions.
 
+    Returns:
+    torch.Tensor: A tensor of shape (num_points, dimensions) containing the sinusoidal points.
+    """
+    if frequencies is None:
+        frequencies = [1.0] * dimensions
+    if phases is None:
+        phases = [0.0] * dimensions
+    if amplitudes is None:
+        amplitudes = [1.0] * dimensions
+    if bounds is None:
+        bounds = [(0, 2 * torch.pi)] * dimensions
 
-def add_gaussian_noise(data, mean=0.0, std=0.1):
-    pass
+    # Initialize the output tensor
+    samples = torch.zeros(num_points, dimensions)
 
+    # Create time steps based on bounds
+    for i in range(dimensions):
+        start, end = bounds[i]
+        t = torch.linspace(start, end, num_points)
+
+        # Generate the sinusoidal pattern for the dimension
+        samples[:, i] = amplitudes[i] * torch.sin(frequencies[i] * t + phases[i])
+
+    return samples
+
+def sample_impulse_noise(num_points, dimensions, noise_prob, noise_level=1.0):
+    """
+    Generate impulse noise to be added to any distribution. The noise consists of sparse,
+    large amplitude values occurring with a given probability.
+
+    Parameters:
+    num_points (int): Number of samples to generate.
+    dimensions (int): Dimensionality of each sample.
+    noise_prob (float): Probability of noise affecting a given point (0 <= noise_prob <= 1).
+    noise_level (float): The amplitude of the noise (default is 1.0, can be adjusted).
+
+    Returns:
+    torch.Tensor: A tensor of shape (num_points, dimensions) containing the impulse noise.
+    """
+    # Initialize the noise tensor
+    result = torch.zeros(num_points, dimensions)
+
+    # Determine which elements will receive the impulse noise
+    noise_mask = torch.rand(num_points, dimensions) < noise_prob
+
+    # Apply noise where the mask is True
+    # Noise can be positive or negative; here, we assume it's symmetric around zero
+    result[noise_mask] = noise_level * torch.sign(torch.rand_like(result[noise_mask]) - 0.5)
+
+    return result
 
 if __name__ == "__main__":
 
@@ -266,5 +333,15 @@ if __name__ == "__main__":
             sample_exponential(num_points, dimensions=1),
         )
         torch.save(samples, "synthetic_data/sample_exponential.pt")
+
+        samples = sample_sphere(num_points, dimensions)
+        torch.save(samples, "synthetic_data/sample_sphere.pt")
+
+        samples = sample_sinusoidal(num_points, dimensions, [1, 2], [0, torch.pi/2], [1, 0.5], [(0, torch.pi), (0, 4*torch.pi)])
+        torch.save(samples, "synthetic_data/sample_sinusoidal.pt")
+
+        samples = sample_sphere(num_points, dimensions) + sample_impulse_noise(num_points, dimensions, noise_prob= 0.1, noise_level= 0.1)
+        torch.save(samples, "synthetic_data/sample_impulse.pt")
+
 
     main()
