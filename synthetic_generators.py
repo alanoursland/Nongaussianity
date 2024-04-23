@@ -19,13 +19,49 @@ def sample_gaussian(num_points, dimensions=1, mean=None, covariance=None, scale=
     # Sample from the Gaussian distribution
     result = torch.randn(num_points, dimensions)
     # Apply the mean and covariance
+    if scale is not None:
+        result.mul_(scale)
     if covariance is not None:
         L = torch.linalg.cholesky(covariance)
         result.matmul_(L)
     if mean is not None:
         result.add_(mean)
-    if scale is not None:
-        result.mul_(scale)
+    return result
+
+import torch
+import numpy as np
+
+def sample_skew(num_points, dimension, mean=None, covariance=None, skew=None):
+    """
+    Generate points from a multivariate skew-normal distribution.
+
+    Parameters:
+    num_points (int): Number of points to generate.
+    dimension (int): Dimensionality of each data point.
+    mean (torch.Tensor | None): Mean of the distribution. Defaults to a vector of zeros.
+    covariance (torch.Tensor | None): Covariance matrix of the distribution. Defaults to the identity matrix.
+    skew (torch.Tensor | None): Skewness vector of the distribution. Defaults to a vector of zeros (normal distribution).
+
+    Returns:
+    torch.Tensor: Tensor of sampled points.
+    """
+
+    # Generate Gaussian samples
+    result = torch.randn(num_points, dimension)
+
+    if covariance is not None:
+        L = torch.linalg.cholesky(covariance)
+        result.matmul_(L)
+
+    # Apply skew
+    # Omega is the cumulative distribution function of the normal distribution evaluated at each point
+    if skew is not None:
+        omega = torch.distributions.Normal(0, 1).cdf(skew * result)
+        result.add_(skew * omega)
+
+    if mean is not None:
+        result.add_(mean)
+
     return result
 
 
@@ -115,25 +151,6 @@ def sample_levy(num_points, dimensions, scale=1.0):
     return levy_samples
 
 
-def sample_skewed(num_points, dimension, distribution_type="lognormal", scale=1.0):
-    pass
-
-
-def sample_clustered(
-    num_points, dimension, num_clusters, means, covariances, cluster_sizes
-):
-    pass
-
-
-def sample_geometric(num_points, dimension, pattern_type="spiral", **pattern_params):
-    pass
-
-
-def sample_trimodal(num_points, dimensions):
-    """Generate points from a trimodal distribution."""
-    pass
-
-
 def sample_log_normal(num_points, dimensions):
     """Generate points from a log-normal distribution."""
     pass
@@ -204,6 +221,9 @@ if __name__ == "__main__":
 
         samples = sample_gaussian(num_points, dimensions)
         torch.save(samples, "synthetic_data/sample_gaussian.pt")
+
+        samples = sample_skew(num_points, dimensions, skew=torch.tensor([1, -1]))
+        torch.save(samples, "synthetic_data/sample_skew.pt")
 
         samples = sample_uniform(
             num_points, dimensions, bounds=torch.tensor([[0, -1], [1, 2]])
