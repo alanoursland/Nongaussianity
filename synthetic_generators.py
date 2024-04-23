@@ -1,3 +1,4 @@
+import os
 import torch
 
 
@@ -52,26 +53,66 @@ def sample_uniform(num_points, dimensions, bounds=None):
     return result
 
 
-def concat_samples(samples1, samples2):
+def merge_sets(*samples):
     """
-    Concatenate two sets of samples to form a single dataset.
+    Add samples from two sets of size n and m, with the same dimeensions, to form a single set of size n+m.
 
     Parameters:
-    samples1 (torch.Tensor): The first set of samples.
-    samples2 (torch.Tensor): The second set of samples.
+    *samples: An arbitrary number of torch.Tensor objects to concatenate.
 
     Returns:
     torch.Tensor: The concatenated set of samples.
     """
-    return torch.cat([samples1, samples2], dim=0)
+    return torch.cat(samples, dim=0)
 
 
-def sample_multimodal(num_points, dimension, num_modes, means, covariances):
-    pass
+def merge_dimensions(*samples):
+    """
+    Add samples from two sets of dimension j and k, with the same number of samples, to form a single set of size n with dimensions j+k.
+
+    Parameters:
+    *samples: An arbitrary number of torch.Tensor objects to concatenate.
+
+    Returns:
+    torch.Tensor: The concatenated set of samples.
+    """
+    return torch.cat(samples, dim=1)
 
 
-def sample_heavy_tailed(num_points, dimension, distribution_type="cauchy", scale=1.0):
-    pass
+def sample_cauchy(num_points, dimensions, scale=1.0):
+    """
+    Generate samples from a Cauchy distribution for each dimension.
+
+    Parameters:
+    num_points (int): The number of samples to generate.
+    dimensions (int): The number of dimensions for each sample.
+    scale (float): The scale parameter of the Cauchy distribution, defaults to 1.0.
+
+    Returns:
+    torch.Tensor: A tensor of shape (num_points, dimension) containing the sampled points.
+    """
+    cauchy_dist = torch.distributions.Cauchy(loc=0, scale=scale)  # loc is always zero for standard Cauchy
+    result = cauchy_dist.sample((num_points, dimensions))
+    return result
+
+
+def sample_levy(num_points, dimensions, scale=1.0):
+    """
+    Generate samples from a Lévy distribution for each dimension. The Lévy distribution is
+    not directly supported in PyTorch, so this function uses a transformation method.
+
+    Parameters:
+    num_points (int): The number of samples to generate.
+    dimensions (int): The number of dimensions for each sample.
+    scale (float): The scale parameter for the Lévy distribution, defaults to 1.0.
+
+    Returns:
+    torch.Tensor: A tensor of shape (num_points, dimension) containing the sampled points.
+    """
+    u = torch.rand(num_points, dimensions)  # Uniform distribution
+    v = torch.distributions.Exponential(1).sample((num_points, dimensions))  # Exponential distribution
+    levy_samples = torch.sqrt(scale / v) * torch.cos(2 * torch.pi * u)
+    return levy_samples
 
 
 def sample_skewed(num_points, dimension, distribution_type="lognormal", scale=1.0):
@@ -90,16 +131,6 @@ def sample_geometric(num_points, dimension, pattern_type="spiral", **pattern_par
 
 def sample_trimodal(num_points, dimensions):
     """Generate points from a trimodal distribution."""
-    pass
-
-
-def sample_cauchy(num_points, dimensions):
-    """Generate points from a Cauchy distribution."""
-    pass
-
-
-def sample_levy(num_points, dimensions):
-    """Generate points from a Levy distribution."""
     pass
 
 
@@ -165,6 +196,8 @@ def add_gaussian_noise(data, mean=0.0, std=0.1):
 if __name__ == "__main__":
 
     def main():
+        os.makedirs("synthetic_data", exist_ok=True)
+
         # Specify the sample size
         num_points = 1000
         dimensions = 2
@@ -177,11 +210,35 @@ if __name__ == "__main__":
         )
         torch.save(samples, "synthetic_data/sample_uniform.pt")
 
-        samples = concat_samples(
+        samples = merge_sets(
             sample_gaussian(num_points // 2, dimensions, mean=torch.tensor([3, 0])),
             sample_gaussian(num_points // 2, dimensions, mean=torch.tensor([-3, 0])),
         )
         torch.save(samples, "synthetic_data/sample_bimodal.pt")
 
-    main()
+        samples = merge_dimensions(
+            sample_uniform(num_points, dimensions=1, bounds=torch.tensor([[-10], [10]])),
+            sample_gaussian(num_points, dimensions=1),
+        )
+        torch.save(samples, "synthetic_data/sample_mixed_dim.pt")
 
+        samples = merge_sets(
+            sample_uniform(num_points, dimensions=2, bounds=torch.tensor([[-1, -10], [1, 10]])),
+            sample_uniform(num_points, dimensions=2, bounds=torch.tensor([[-10, -1], [10, 1]]))
+        )
+        torch.save(samples, "synthetic_data/sample_cross.pt")
+
+        # samples = sample_cauchy(num_points, dimensions)
+        samples = merge_dimensions(
+            sample_uniform(num_points, dimensions=1, bounds=torch.tensor([[-10], [10]])),
+            sample_cauchy(num_points, dimensions=1))
+        torch.save(samples, "synthetic_data/sample_cauchy.pt")
+
+        # samples = sample_levy(num_points, dimensions)
+        samples = merge_dimensions(
+            sample_uniform(num_points, dimensions=1, bounds=torch.tensor([[-10], [10]])),
+            sample_levy(num_points, dimensions=1))
+        torch.save(samples, "synthetic_data/sample_levy.pt")
+
+
+    main()
