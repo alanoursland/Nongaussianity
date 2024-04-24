@@ -4,6 +4,18 @@ import scipy
 import torch
 
 
+def expected_normal_kurtosis(data):
+    _, dimensions = data.shape
+    return dimensions * (dimensions + 2)
+
+
+def expected_normal_entropy(covariance):
+    d = covariance.shape[0]
+    return 0.5 * d * (
+        1 + torch.log(2 * torch.pi * torch.exp(torch.tensor(1.0)))
+    ) + 0.5 * torch.logdet(covariance)
+
+
 def calculate_moments(data, num_moments=4, eps=1e-8):
     """
     Calculate the specified number of moments (mean, covariance, skewness, and kurtosis) of a set of n-dimensional points.
@@ -60,12 +72,7 @@ def calculate_moments(data, num_moments=4, eps=1e-8):
     return mean, covariance, skewness, kurtosis
 
 
-def expected_normal_kurtosis(data):
-    _, dimensions = data.shape
-    return dimensions * (dimensions + 2)
-
-
-def calculate_jarque_bera(sample_count, skewness, kurtosis):
+def calculate_jarque_bera(sample_count, dimensions, skewness, kurtosis):
     """
     Perform the Jarque-Bera test on sample data to determine if the data are likely to have come from a Gaussian distribution.
 
@@ -87,7 +94,10 @@ def calculate_jarque_bera(sample_count, skewness, kurtosis):
     """
 
     # Calculate the Jarque-Bera test statistic for each dimension
-    jb_stat = (sample_count / 6) * (skewness.pow(2) + 0.25 * (kurtosis - 3).pow(2))
+    expected_kurtosis = dimensions * (dimensions + 2)
+    jb_stat = (sample_count / 6) * (
+        skewness.pow(2) + 0.25 * (kurtosis - expected_kurtosis).pow(2)
+    )
 
     # Two degrees of freedom: skewness and kurtosis
     p_value = 1 - scipy.stats.chi2.cdf(
@@ -120,6 +130,7 @@ def calculate_shapiro_wilk(data):
     float: The test statistic.
     float: The p-value of the test.
     """
+    print(data.size())
     test_statistic, p_value = scipy.stats.shapiro(data)
     return test_statistic, p_value
 
@@ -240,6 +251,310 @@ def calculate_mardias(data):
     }
 
 
+def calculate_roystons(data):
+    """
+    Perform Royston's multivariate normality test on a dataset.
+
+    The Shapiro-Wilk test, which is a component of Royston's test for assessing multivariate
+    normality, is traditionally more accurate for smaller sample sizes (typically N < 5000).
+    For larger datasets, the computation of the test statistic can be influenced by the sheer
+    volume of data, potentially leading to inaccuracies in estimating the p-value. This is due
+    to the complexity of calculations involved and the assumptions about distribution
+    characteristics at such scale.
+
+    This test statistic is calculated by combining the test statistics (specifically the
+    p-values) from individual Shapiro-Wilk tests applied to each dimension of your dataset. A
+    higher test statistic generally indicates stronger evidence against the null hypothesis, but
+    it's the p-value that will provide a clear decision criterion.
+
+    Parameters:
+        data (torch.Tensor): A PyTorch tensor where each column represents a variable.
+
+    Returns:
+        float, float: The combined test statistic and the p-value indicating the test result.
+    """
+    # Assuming data is a PyTorch tensor, convert to NumPy for Shapiro-Wilk test
+    if isinstance(data, torch.Tensor):
+        data = data.numpy()
+
+    # Calculate Shapiro-Wilk statistics for each variable
+    sw_statistics = [scipy.stats.shapiro(data[:, i]) for i in range(data.shape[1])]
+
+    # Extract test statistics and p-values
+    p_values = np.array([stat[1] for stat in sw_statistics])
+
+    # Combine the p-values using Fisher's method
+    combined_statistic, combined_p_value = scipy.stats.combine_pvalues(
+        p_values, method="fisher"
+    )
+
+    return combined_statistic, combined_p_value
+
+
+def calculate_henze_zirkler(data):
+    """
+    Perform Henze-Zirkler's multivariate normality test using PyTorch.
+
+    Parameters:
+        data (torch.Tensor): A PyTorch tensor where each row represents an observation and each column a variable.
+
+    Returns:
+        float, float: The test statistic and the p-value indicating the test result.
+    """
+    n, d = data.shape
+    mean = torch.mean(data, dim=0)
+    cov = torch.cov(data.t())  # Transpose data to get variables as rows
+    cov_inv = torch.linalg.inv(cov)
+
+    # Calculate Mahalanobis distances
+    diff = data - mean
+    mahalanobis_dist = torch.diag(torch.mm(torch.mm(diff, cov_inv), diff.t()))
+
+    # Henze-Zirkler test statistic
+    b2 = (1 + (d + 1) / n) / 2
+    epsilon = 0.005  # Small tolerance for b2 calculation
+    if b2 > 0.5 and b2 <= 0.5 + epsilon:
+        b2 = 0.5 - epsilon  # Truncate b2 to 0.5 if it slightly exceeds
+
+    S = torch.sum(torch.exp(-b2 * mahalanobis_dist / 2))
+
+    # Ensure the argument inside the sqrt is non-negative
+    argument = 2 * n * b2**d / (1 - 2 * b2) ** (d / 2) ** 2
+    if argument < 0:
+        return None, None  # Adjust the method or handle error
+    argument = torch.tensor(argument, dtype=torch.float32)
+    test_statistic = (
+        S - n * (1 - b2) ** (d / 2) / (1 - 2 * b2) ** (d / 2)
+    ) / torch.sqrt(argument)
+
+    # Compute p-value using SciPy as PyTorch does not support chi-squared CDF
+    test_statistic_np = test_statistic.item()  # Convert to Python scalar
+    p_value = 1 - scipy.stats.chi2.cdf(test_statistic_np, d)
+
+    return test_statistic_np, p_value
+
+
+def calculate_energy_test(
+    data,
+    critical_value=None,
+    mean=None,
+    cov=None,
+    samples=None,
+    simulations=None,
+    alpha=0.05,
+):
+    """
+    Calculate the Energy Test for Normality on a dataset. This test is useful in statistical
+    analysis to determine if a dataset significantly deviates from a Gaussian (normal)
+    distribution.
+
+    1. Compute pairwise distances between all points in your dataset.
+    2. Calculate the energy statistic using the distances, which involves the mean of the pairwise distances and the distances between sample points and a reference point.
+    3. Return the test statistic. Normally, you would compare this against critical values to determine the normality, but since the focus here is on computation, we'll compute the statistic first.
+
+    To determine normality by comparing the calculated energy statistic against critical values,
+    you need a reference distribution of the energy statistic under the null hypothesis that the
+    data is normally distributed. Since the distribution of the energy statistic under the null
+    hypothesis typically doesn't have a simple analytical form, it's common to estimate these
+    critical values through simulation (bootstrapping) or by using asymptotic approximations if
+    available.
+
+    This function can also simulate critical values if necessary parameters are provided.
+
+    Parameters:
+        data (torch.Tensor): The data points as a PyTorch tensor, shape (n_samples, n_features)
+
+    Returns:
+        float: The energy statistic
+    """
+    if (
+        critical_value is None
+        and mean is not None
+        and cov is not None
+        and samples is not None
+        and simulations is not None
+    ):
+        # calculate the critical value if we have been given a reference Gaussian
+        simulated_data = [
+            torch.tensor(
+                np.random.multivariate_normal(mean, cov, samples), dtype=torch.float32
+            )
+            for _ in range(simulations)
+        ]
+        energy_statistics = [
+            calculate_energy_test(data=sim_data)["energy_statistic"]
+            for sim_data in simulated_data
+        ]
+        critical_value = np.percentile(energy_statistics, 100 * (1 - alpha))
+
+    # Compute pairwise distances
+    dist_matrix = torch.cdist(data, data, p=2)
+
+    # Calculate the mean pairwise distance
+    n = data.size(0)
+    mean_dist = torch.mean(dist_matrix)
+
+    # Calculate distances from the mean (the centroid of the data)
+    mean_vector = torch.mean(data, dim=0)
+    dist_from_mean = torch.norm(data - mean_vector, dim=1, p=2)
+
+    # Calculate the mean of these distances
+    mean_dist_from_mean = torch.mean(dist_from_mean)
+
+    # Energy statistic computation
+    energy_statistic = 2 * mean_dist - mean_dist_from_mean
+
+    # Determine if we should reject the null hypothesis
+    reject_null_hypothesis = (
+        energy_statistic > critical_value if critical_value is not None else None
+    )
+
+    return {
+        "energy_statistic": energy_statistic.item(),
+        "critical_value": critical_value,
+        "reject_null_hypothesis": reject_null_hypothesis,
+    }
+
+
+def k_nearest_neighbors_entropy(data, k=3):
+    """
+    Estimate entropy using the k-nearest neighbors method for multivariate data in PyTorch.
+    """
+    # Calculate pairwise distances
+    dist_matrix = torch.cdist(data, data, p=2)
+
+    # Get distances to the k-nearest neighbors, excluding the point itself
+    # torch.topk can be used to find the k smallest distances
+    k_distances, _ = torch.topk(dist_matrix, k + 1, largest=False, sorted=True)
+    radius = k_distances[:, k]  # Distance to the k-th nearest neighbor (exclude itself)
+
+    # Calculate entropy
+    entropy_estimate = (
+        torch.mean(torch.log(radius)) * data.shape[1]
+        + torch.log(torch.tensor(k))
+        - torch.log(torch.tensor(data.shape[0] - 1))
+    )
+    return entropy_estimate.item()
+
+
+def calculate_density_knn(data, k):
+    """
+    Estimate the probability density using the k-nearest neighbors.
+    """
+    n_samples, n_features = data.size()
+    distances = torch.cdist(data, data)
+    _, indices = torch.topk(distances, k + 1, dim=1, largest=False)
+    radii = distances[torch.arange(n_samples), indices[:, -1]]
+
+    volume_unit_ball = torch.pow(
+        torch.tensor(torch.pi), n_features / 2
+    ) / scipy.special.gamma(n_features / 2 + 1)
+    volumes = volume_unit_ball * torch.pow(radii, n_features)
+
+    density = k / (n_samples * volumes)
+    return density
+
+
+def calculate_negentropy_knn(data, k=3):
+    """
+    Calculate the negentropy of a dataset to measure the non-Gaussianity.
+
+    Negentropy is computed as the difference between the entropy of a Gaussian distribution
+    with the same covariance as the data and the estimated entropy of the data.
+
+    Negentropy is always non-negative and zero if and only if the data follows
+    a Gaussian distribution. It is a measure of deviation from the Gaussianity,
+    where larger values indicate greater deviation.
+
+    Parameters:
+        data (torch.Tensor): A PyTorch tensor containing the data set for which negentropy should be calculated.
+
+    Returns:
+        float: The calculated negentropy of the data.
+    """
+    density = calculate_density_knn(data, k)
+    data_entropy = -torch.mean(torch.log(density))
+    gaussian_entropy_val = expected_normal_entropy(torch.cov(data.T))
+    negentropy = gaussian_entropy_val - data_entropy
+    return negentropy.item()
+
+
+def calculate_negentropy_kde(data):
+    """
+    Compute the negentropy using Kernel Density Estimation (KDE).
+    """
+    _, n_features = data.size()
+
+    np_data = data.T.numpy()
+    # Compute the Gaussian KDE
+    kde = scipy.stats.gaussian_kde(np_data)
+
+    # Estimate the probability density using KDE
+    density = torch.tensor(kde(np_data), dtype=torch.float32)
+
+    # Compute the entropy of the estimated probability density
+    data_entropy = -torch.mean(torch.log(density))
+
+    # Compute the entropy of a Gaussian distribution with the same mean and variance as the data
+    covariance = torch.cov(data.T)
+    gaussian_entropy = 0.5 * n_features * (
+        1 + torch.log(2 * torch.tensor(torch.pi))
+    ) + 0.5 * torch.log(torch.det(covariance))
+
+    # Compute the negentropy
+    negentropy = gaussian_entropy - data_entropy
+
+    return negentropy.item()
+
+
+def calculate_mutual_information_kde(
+    data, integration_method="mc", n_integration_samples=10000
+):
+    """
+    Compute the mutual information between features using Kernel Density Estimation (KDE).
+    """
+    _, n_features = data.size()
+
+    # Compute the marginal and joint probability densities using KDE
+    marginal_densities = []
+    for i in range(n_features):
+        feature_data = data[:, i].unsqueeze(1).cpu().numpy()
+        kde = scipy.stats.gaussian_kde(feature_data.T)
+        marginal_densities.append(kde)
+
+    joint_density = scipy.stats.gaussian_kde(data.T.cpu().numpy())
+
+    # Define the integrand function for mutual information calculation
+    def integrand(*args):
+        marginals = [marginal_densities[i](arg) for i, arg in enumerate(args)]
+        joint = joint_density(args)
+        return joint * np.log(joint / np.prod(marginals))
+
+    # Compute the mutual information using numerical integration
+    lower_bounds = [data[:, i].min().item() for i in range(n_features)]
+    upper_bounds = [data[:, i].max().item() for i in range(n_features)]
+    bounds = [[low, high] for low, high in zip(lower_bounds, upper_bounds)]
+
+    if integration_method == "mc":
+        # n_samples needs to grow exponentially with dimension count
+        samples = np.random.uniform(
+            low=lower_bounds,
+            high=upper_bounds,
+            size=(n_integration_samples, n_features),
+        )
+        integral = np.mean([integrand(*sample) for sample in samples])
+        mutual_info = integral * np.prod(
+            np.array(upper_bounds) - np.array(lower_bounds)
+        )
+    elif integration_method == "quad":
+        # nquad is slower but more accurate
+        mutual_info, _ = scipy.integrate.nquad(integrand, bounds)
+    else:
+        raise ValueError(f"Unknown integration_method {integration_method}")
+
+    return mutual_info
+
+
 if __name__ == "__main__":
 
     def main():
@@ -248,24 +563,41 @@ if __name__ == "__main__":
         dimensions = 3
         data = synthetic_generators.sample_gaussian(num_points, dimensions)
 
-        # Calculate up to the 4th moment
         moments = calculate_moments(data, 4)
 
         print("Mean:\n", moments[0])
         print("Covariance:\n", moments[1])
         print("Skewness:\n", moments[2])
         print("Kurtosis:\n", moments[3])
-
         print(
-            f"Jarque-Bera {calculate_jarque_bera(num_points, moments[2], moments[3])}"
+            f"Jarque-Bera {calculate_jarque_bera(num_points, dimensions, moments[2], moments[3])}"
         )
-        print(f"Shapiro-Wilk {calculate_shapiro_wilk(data)}")
+        print(f"Shapiro-Wilk {calculate_shapiro_wilk(data[:1000])}")
         print(f"Anderson-Darling {calculate_anderson_darling(data[:, 0])}")
         print(f"Anderson-Darling {calculate_anderson_darling(data[:, 1])}")
         print(f"Anderson-Darling {calculate_anderson_darling(data[:, 2])}")
         print(f"Kolmogorov-Smirnov {calculate_kolmogorov_smirnov(data[:, 0])}")
         print(f"Kolmogorov-Smirnov {calculate_kolmogorov_smirnov(data[:, 1])}")
         print(f"Kolmogorov-Smirnov {calculate_kolmogorov_smirnov(data[:, 2])}")
-        print(f"Mardia's Tests {calculate_mardias(data)}")
+        print(f"Mardia's Test {calculate_mardias(data)}")
+        print(f"Royston's Test {calculate_roystons(data[0:1000])}")
+        print(f"Henze-Zirkler Test {calculate_henze_zirkler(data)}")
+        print(f"Energy Test {calculate_energy_test(data, critical_value=3.0)}")
+        print(
+            f"Energy Test {calculate_energy_test(data, mean=torch.zeros(dimensions), cov=torch.eye(dimensions), samples=1000, simulations=100)}"
+        )
+        print(f"Negentropy k-NN  3 {calculate_negentropy_knn(data, k=3)}")
+        print(f"Negentropy k-NN  6 {calculate_negentropy_knn(data, k=6)}")
+        print(f"Negentropy KDE {calculate_negentropy_kde(data)}")
+        print(
+            f"Mutual Information x (KLD) {calculate_mutual_information_kde(data[:, 0].unsqueeze(1), integration_method = 'quad')}"
+        )
+        print(
+            f"Mutual Information y (KLD) {calculate_mutual_information_kde(data[:, 1].unsqueeze(1), integration_method = 'quad')}"
+        )
+        print(
+            f"Mutual Information z (KLD) {calculate_mutual_information_kde(data[:, 2].unsqueeze(1), integration_method = 'quad')}"
+        )
+        print(f"Mutual Information (KLD) {calculate_mutual_information_kde(data)}")
 
     main()

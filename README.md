@@ -39,7 +39,7 @@ Implements a suite of tests to evaluate the conformity of the data distribution 
    - **Mardia's, Royston's, Henze-Zirkler**: Advanced tests that provide more robust assessments under various conditions and sample sizes.
 
 3. **Entropy Analysis**: 
-   - **Energy Test for Normality and Negentropy**: Evaluate the departure from normality by measuring the statistical independence and randomness within the dataset.
+   - **Energy Test for Normality and Negentropy**: Evaluate the departure from normality by measuring the statistical independence and randomness within the dataset. Negentropy solutions using K-Nearest-Neighbors and Kernal Density Estimation are provided.
    - **Mutual Information (equivalent to Kullback-Leibler Divergence)**: Quantifies the amount of information lost when approximating the true distribution with a Gaussian model.
 
 ## Proposed Techniques
