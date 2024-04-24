@@ -256,16 +256,16 @@ if __name__ == "__main__":
         print("Skewness:\n", moments[2])
         print("Kurtosis:\n", moments[3])
 
-        # print(
-        #     f"Jarque-Bera {calculate_jarque_bera(num_points, moments[2], moments[3])}"
-        # )
-        # print(f"Shapiro-Wilk {calculate_shapiro_wilk(data)}")
-        # print(f"Anderson-Darling {calculate_anderson_darling(data[:, 0])}")
-        # print(f"Anderson-Darling {calculate_anderson_darling(data[:, 1])}")
-        # print(f"Anderson-Darling {calculate_anderson_darling(data[:, 2])}")
-        # print(f"Kolmogorov-Smirnov {calculate_kolmogorov_smirnov(data[:, 0])}")
-        # print(f"Kolmogorov-Smirnov {calculate_kolmogorov_smirnov(data[:, 1])}")
-        # print(f"Kolmogorov-Smirnov {calculate_kolmogorov_smirnov(data[:, 2])}")
+        print(
+            f"Jarque-Bera {calculate_jarque_bera(num_points, moments[2], moments[3])}"
+        )
+        print(f"Shapiro-Wilk {calculate_shapiro_wilk(data)}")
+        print(f"Anderson-Darling {calculate_anderson_darling(data[:, 0])}")
+        print(f"Anderson-Darling {calculate_anderson_darling(data[:, 1])}")
+        print(f"Anderson-Darling {calculate_anderson_darling(data[:, 2])}")
+        print(f"Kolmogorov-Smirnov {calculate_kolmogorov_smirnov(data[:, 0])}")
+        print(f"Kolmogorov-Smirnov {calculate_kolmogorov_smirnov(data[:, 1])}")
+        print(f"Kolmogorov-Smirnov {calculate_kolmogorov_smirnov(data[:, 2])}")
         print(f"Mardia's Tests {calculate_mardias(data)}")
 
     main()
