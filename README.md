@@ -36,8 +36,6 @@ This repository includes the following techniques for assessing Gaussianity in p
 2. **Normality Tests**: 
 Implements a suite of tests to evaluate the conformity of the data distribution to normality:
    - **Shapiro-Wilk, Anderson-Darling, and Kolmogorov-Smirnov**: Standard tests that assess the hypothesis that a sample comes from a normally distributed population.
-   - **Quantile-Quantile (Q-Q) Plots**: Graphically assess how well the data distribution matches a theoretical normal distribution.
-   - **Box-Cox Transformation**: Attempts to transform data to fit a normal distribution, assessed subsequently by other normality tests.
    - **Mardia's, Royston's, Henze-Zirkler**: Advanced tests that provide more robust assessments under various conditions and sample sizes.
 
 3. **Entropy Analysis**: 
@@ -82,3 +80,13 @@ Our approach involves systematically applying our Gaussianity metrics to each of
 
 This comprehensive testing strategy ensures that our tools are validated across a wide spectrum of conditions, providing users with robust, tested methodologies for assessing Gaussianity in their data.
 
+### Working Notes
+
+#### Kurtosis difference in univariate vs multivariate
+We have "standard kurtosis" which for an n-dim Gaussian has an expected kurtosis of n*(n+2).
+
+And we have "excess kurtosis" which is "kurtosis - expected kurtosis" centered around 0.
+
+There is a way to calculate excess kurtosis directly without subtracting the expected kurtosis.
+
+Multivariate calculations sometimes use excess kurtosis by default.
