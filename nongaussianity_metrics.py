@@ -42,7 +42,12 @@ def calculate_moments(data, num_moments=4, eps=1e-8):
         return (mean,)
 
     centered_points = data - mean
-    covariance = torch.matmul(centered_points.T, centered_points) / (num_points - 1)
+    if centered_points.dim() == 1:
+        covariance = torch.var(centered_points, unbiased=False)
+    elif centered_points.dim() == 2:
+        covariance = torch.matmul(centered_points.T, centered_points) / (num_points - 1)
+    else:
+        raise ValueError("Expect data to have 1 or 2 dimensions.")
 
     if num_moments == 2:
         return mean, covariance
@@ -507,33 +512,35 @@ def calculate_negentropy_kde(data):
     return negentropy.item()
 
 
-def calculate_mutual_information_kde(
-    data, integration_method="mc", n_integration_samples=10000
-):
+def calculate_kld_kde(data, integration_method="mc", n_integration_samples=10000):
     """
     Compute the mutual information between features using Kernel Density Estimation (KDE).
     """
-    _, n_features = data.size()
+    data_np = data.cpu().numpy()  # Convert PyTorch tensor to NumPy array
+    n_samples, n_features = data_np.shape
+
+    # Precompute bounds for each feature
+    lower_bounds = [np.min(data_np[:, i]) for i in range(n_features)]
+    upper_bounds = [np.max(data_np[:, i]) for i in range(n_features)]
 
     # Compute the marginal and joint probability densities using KDE
     marginal_densities = []
     for i in range(n_features):
-        feature_data = data[:, i].unsqueeze(1).cpu().numpy()
+        feature_data = data_np[:, i]
         kde = scipy.stats.gaussian_kde(feature_data.T)
         marginal_densities.append(kde)
 
-    joint_density = scipy.stats.gaussian_kde(data.T.cpu().numpy())
+    joint_density = scipy.stats.gaussian_kde(data_np.T)
 
     # Define the integrand function for mutual information calculation
     def integrand(*args):
-        marginals = [marginal_densities[i](arg) for i, arg in enumerate(args)]
+        marginals = [
+            marginal_densities[i](np.array([arg])) for i, arg in enumerate(args)
+        ]
         joint = joint_density(args)
         return joint * np.log(joint / np.prod(marginals))
 
-    # Compute the mutual information using numerical integration
-    lower_bounds = [data[:, i].min().item() for i in range(n_features)]
-    upper_bounds = [data[:, i].max().item() for i in range(n_features)]
-    bounds = [[low, high] for low, high in zip(lower_bounds, upper_bounds)]
+    bounds = list(zip(lower_bounds, upper_bounds))
 
     if integration_method == "mc":
         # n_samples needs to grow exponentially with dimension count
@@ -544,7 +551,7 @@ def calculate_mutual_information_kde(
         )
         integral = np.mean([integrand(*sample) for sample in samples])
         mutual_info = integral * np.prod(
-            np.array(upper_bounds) - np.array(lower_bounds)
+            [high - low for high, low in zip(upper_bounds, lower_bounds)]
         )
     elif integration_method == "quad":
         # nquad is slower but more accurate
@@ -553,6 +560,202 @@ def calculate_mutual_information_kde(
         raise ValueError(f"Unknown integration_method {integration_method}")
 
     return mutual_info
+
+
+def calculate_kld_pca(data, igen_power=0.95):
+    # Calculate mean and covariance of data
+    mean, covariance = calculate_moments(data, 2)
+    centered_data = data - mean
+
+    # make sure centered_data is a matrix
+    if centered_data.dim() == 1:
+        centered_data = centered_data.unsqueeze(1)
+
+    # Perform PCA on the conditioned covariance
+    if centered_data.size(1) > 1:
+        # Multivariate
+        eigenvalues, eigenvectors = torch.linalg.eigh(covariance)
+        # Sort the principal components from largest eigenvalue to smallest
+        sorted_indices = torch.argsort(eigenvalues, descending=True)
+        sorted_eigenvalues = eigenvalues[sorted_indices]
+        sorted_eigenvectors = eigenvectors[:, sorted_indices]
+        pass
+    else:
+        # Univariate
+        covariance = torch.var(centered_data, unbiased=True)
+        sorted_eigenvalues = covariance.unsqueeze(0)  # Create a one-element tensor
+        sorted_eigenvectors = torch.tensor([[1.0]])  # Eigenvector is 1 in 1D
+
+    # Set any negative eigenvalues to zero
+    sorted_eigenvalues = torch.clamp(sorted_eigenvalues, min=0)
+
+    # Calculate the total sum of eigenvalues
+    total_eigenvalue_sum = torch.sum(sorted_eigenvalues)
+
+    # Initialize variables for iteration
+    processed_eigenvalue_sum = 0
+    mutual_info_sum = 0
+
+    # Iterate over eigenvectors from largest eigenvalue to smallest
+    for eigenvalue, eigenvector in zip(sorted_eigenvalues, sorted_eigenvectors.T):
+        # Project the data onto the eigenvector
+        projected_data = centered_data.mm(eigenvector.unsqueeze(1)).squeeze(1)
+
+        # Calculate the 1D mutual information using KDE
+        # Here, you need to ensure that 'calculate_kld_kde' is implemented in PyTorch
+        mutual_info_1d = calculate_kld_kde(
+            projected_data.unsqueeze(1), integration_method="quad"
+        )
+        mutual_info_sum += mutual_info_1d
+
+        # Update the processed eigenvalue sum
+        processed_eigenvalue_sum += eigenvalue
+
+        # Check if the processed eigenvalue sum exceeds the specified power threshold
+        if processed_eigenvalue_sum / total_eigenvalue_sum > igen_power:
+            break
+
+    return mutual_info_sum
+
+
+def build_univar_gaussian_hist(bins, uniform=False):
+    normal_dist = torch.distributions.normal.Normal(
+        torch.tensor(0.0), torch.tensor(1.0)
+    )
+
+    if uniform:
+        # Generate bin edges with equal probability mass using inverse CDF (ppf)
+        bin_edges = normal_dist.icdf(torch.linspace(0, 1, bins + 1))
+    else:
+        # Generate equally spaced bin edges
+        bin_edges = torch.linspace(-5, 5, bins + 1)
+
+    # Calculate the probability mass for each bin using the CDF
+    bin_probs = normal_dist.cdf(bin_edges[1:]) - normal_dist.cdf(bin_edges[:-1])
+
+    # Normalize the probabilities to ensure they sum to 1 (for numerical stability)
+    bin_probs = bin_probs / torch.sum(bin_probs)
+
+    return bin_probs, bin_edges
+
+
+def build_multivar_gaussian_hist(bins, dimensionality, uniform=False):
+    if uniform:
+        # Using SciPy's ppf function to get quantiles for equal mass bins
+        bin_edges = (
+            scipy.stats.chi2.ppf(np.linspace(0, 1, bins + 1), df=dimensionality) ** 0.5
+        )
+    else:
+        # Equally spaced bin edges after determining a reasonable maximum value
+        max_value = scipy.stats.chi2.ppf(0.99, df=dimensionality) ** 0.5
+        bin_edges = np.linspace(0, max_value, bins + 1)
+
+    # Calculate probability mass for each bin using CDF
+    bin_probs = scipy.stats.chi2.cdf(
+        bin_edges[1:] ** 2, df=dimensionality
+    ) - scipy.stats.chi2.cdf(bin_edges[:-1] ** 2, df=dimensionality)
+
+    # Normalize probabilities (this should already sum to 1, but good to ensure numerical stability)
+    bin_probs = bin_probs / np.sum(bin_probs)
+
+    # Convert results to PyTorch tensors
+    bin_probs_torch = torch.from_numpy(bin_probs.astype(np.float32))
+    bin_edges_torch = torch.from_numpy(bin_edges.astype(np.float32))
+
+    return bin_probs_torch, bin_edges_torch
+
+
+def build_univar_hist(data, bin_edges):
+    # Initialize histogram tensor
+    hist = torch.zeros(bin_edges.shape[0] - 1, dtype=torch.float32)
+
+    # Calculate the index for each data point
+    indices = torch.bucketize(data, bin_edges, right=True)
+    indices = torch.clamp(indices - 1, 0, hist.shape[0] - 1)
+
+    # Count occurrences in each bin
+    for i in range(hist.shape[0]):
+        hist[i] = torch.sum(indices == i)
+
+    epsilon = 1e-10
+    hist = torch.clamp(hist, min=epsilon)
+
+    # Normalize the histogram to obtain probabilities
+    hist = hist / torch.sum(hist)
+
+    return hist
+
+
+def kld_for_hist(hist1, hist2):
+    # print(f"hist1 {hist1}")
+    # print(f"hist2 {hist2}")
+    # Calculate the KLD for each bin
+    kld_bins = hist1 * torch.log(hist1 / hist2)
+    kld_sum = torch.sum(kld_bins)
+    # print(f"kld_bins {kld_bins}")
+
+    return kld_sum
+
+
+def calculate_kld_univar_hist(data, bins, mean=None, covariance=None, uniform=False):
+    if data.dim() == 1:
+        data = data.unsqueeze(1)
+
+    if mean is None:
+        mean = torch.mean(data, dim=0)
+    if covariance is None:
+        covariance = torch.var(data, unbiased=False)
+
+    centered_data = data - mean
+
+    # Build the standard normal histogram
+    reference_hist, bin_edges = build_univar_gaussian_hist(bins, uniform)
+
+    # Calculate the Mahalanobis distances
+    signed_distances = centered_data / torch.sqrt(covariance)
+
+    # Build the histogram of the Mahalanobis distances using custom histogram function
+    data_hist = build_univar_hist(signed_distances, bin_edges)
+
+    # Calculate the KLD between the data histogram and the reference histogram
+    return kld_for_hist(data_hist, reference_hist)
+
+
+def calculate_kld_multivar_hist(
+    data, bins, mean=None, cov=None, inv_cov=None, uniform=False
+):
+    n_samples, n_features = data.size()
+
+    if mean is None:
+        mean = torch.mean(data, dim=0)
+
+    centered_points = data - mean
+    if cov is None:
+        cov = torch.matmul(centered_points.T, centered_points) / (n_samples - 1)
+
+    if inv_cov is None:
+        inv_cov = torch.inverse(cov + 1e-8 * torch.eye(cov.size(0)))
+
+    # Assume build_multivar_gaussian_hist is implemented correctly in PyTorch
+    reference_hist, bin_edges = build_multivar_gaussian_hist(bins, n_features, uniform)
+
+    # Calculate the Mahalanobis distances
+    centered_data = data - mean
+    mahalanobis_distances_squared = torch.sum(
+        (centered_data @ inv_cov) * centered_data, axis=1
+    )
+    mahalanobis_distances = torch.sqrt(mahalanobis_distances_squared)
+
+    # Build the histogram of the Mahalanobis distances using a custom function for variable bin widths
+    data_hist = build_univar_hist(mahalanobis_distances, bin_edges)
+
+    # Normalize the histogram to obtain probabilities
+    data_hist = data_hist / torch.sum(data_hist)
+
+    # Assume kld_for_histograms is implemented correctly in PyTorch
+    kld = kld_for_hist(data_hist, reference_hist)
+
+    return kld
 
 
 if __name__ == "__main__":
@@ -564,7 +767,6 @@ if __name__ == "__main__":
         data = synthetic_generators.sample_gaussian(num_points, dimensions)
 
         moments = calculate_moments(data, 4)
-
         print("Mean:\n", moments[0])
         print("Covariance:\n", moments[1])
         print("Skewness:\n", moments[2])
@@ -590,14 +792,29 @@ if __name__ == "__main__":
         print(f"Negentropy k-NN  6 {calculate_negentropy_knn(data, k=6)}")
         print(f"Negentropy KDE {calculate_negentropy_kde(data)}")
         print(
-            f"Mutual Information x (KLD) {calculate_mutual_information_kde(data[:, 0].unsqueeze(1), integration_method = 'quad')}"
+            f"Kullback-Leibler Divergence x KDE {calculate_kld_kde(data[:, 0].unsqueeze(1), integration_method = 'quad')}"
         )
         print(
-            f"Mutual Information y (KLD) {calculate_mutual_information_kde(data[:, 1].unsqueeze(1), integration_method = 'quad')}"
+            f"Kullback-Leibler Divergence y KDE {calculate_kld_kde(data[:, 1].unsqueeze(1), integration_method = 'quad')}"
         )
         print(
-            f"Mutual Information z (KLD) {calculate_mutual_information_kde(data[:, 2].unsqueeze(1), integration_method = 'quad')}"
+            f"Kullback-Leibler Divergence z KDE {calculate_kld_kde(data[:, 2].unsqueeze(1), integration_method = 'quad')}"
         )
-        print(f"Mutual Information (KLD) {calculate_mutual_information_kde(data)}")
+        print(f"Kullback-Leibler Divergence KDE {calculate_kld_kde(data)}")
+        print(f"Kullback-Leibler Divergence PCA x {calculate_kld_pca(data[:, 0])}")
+        print(f"Kullback-Leibler Divergence PCA xy {calculate_kld_pca(data[:, 0:1])}")
+        print(f"Kullback-Leibler Divergence PCA xyz {calculate_kld_pca(data)}")
+        print(
+            f"Kullback-Leibler Divergence Hist x {calculate_kld_univar_hist(data[:, 0], 10)}"
+        )
+        print(
+            f"Kullback-Leibler Divergence Hist y {calculate_kld_univar_hist(data[:, 1], 10)}"
+        )
+        print(
+            f"Kullback-Leibler Divergence Hist z {calculate_kld_univar_hist(data[:, 2], 10)}"
+        )
+        print(f"KLD Hist z u {calculate_kld_univar_hist(data[:, 2], 10, uniform=True)}")
+        print(f"KLD Hist {calculate_kld_multivar_hist(data, 10)}")
+        print(f"KLD Hist u {calculate_kld_multivar_hist(data, 10, uniform=True)}")
 
     main()
